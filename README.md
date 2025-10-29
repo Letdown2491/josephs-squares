@@ -11,8 +11,6 @@ Joseph’s Squares is a two-player pencil-and-paper style strategy game inspired
 3. Every path must stay outside the squares—the line cannot pass through their interior. Existing lines also cannot be crossed.
 4. Each side can be used once. Players alternate turns drawing connections; the first player without a legal move loses.
 
-Need a fresh start? Use **Start new game** in the toolbar (it becomes **Play again** after a win). Toggle light/dark mode with the sun/moon button beside the title. The collapsible **Game Rules** panel keeps a quick refresher handy without crowding the play space.
-
 ## Strategy Notes
 
 - With only two squares, the second player has a forced win once they understand the pattern.
