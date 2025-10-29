@@ -970,6 +970,16 @@ function App() {
       updatedField,
     )
 
+    if (!movesRemain && connections.length === 0) {
+      setSelectedSide(null)
+      setFreeformLine(null)
+      showMessage(
+        MESSAGE_LEVELS.WARNING,
+        'Nice try, cheater. Try again!',
+      )
+      return false
+    }
+
     setConnections(updatedConnections)
     setUsedSides(updatedUsedSides)
     setSelectedSide(null)
