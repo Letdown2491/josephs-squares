@@ -1,4 +1,5 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { Buffer } from 'node:buffer';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { minify } from 'html-minifier-terser';
@@ -7,6 +8,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, '../dist');
 const sourceHtmlPath = path.join(distDir, 'index.html');
 const outputHtmlPath = path.join(distDir, 'spa.html');
+const docsDir = path.resolve(__dirname, '../docs');
+const docsOutputPath = path.join(docsDir, 'index.html');
+const publicDir = path.resolve(__dirname, '../public');
 
 const stylesheetRegex =
   /<link\s+[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/gi;
@@ -59,10 +63,48 @@ async function inlineAssets(html) {
   return inlinedJs;
 }
 
+async function inlineFavicon(html) {
+  const faviconRegex =
+    /<link\s+[^>]*rel=["']icon["'][^>]*href=["']([^"']+)["'][^>]*>/i;
+  const match = faviconRegex.exec(html);
+
+  if (!match) {
+    return html;
+  }
+
+  const [, href] = match;
+
+  if (href.startsWith('data:')) {
+    return html;
+  }
+
+  const cleanedHref = href.replace(/^\//, '');
+  const candidatePaths = [
+    path.resolve(distDir, cleanedHref),
+    path.resolve(publicDir, cleanedHref),
+  ];
+
+  for (const candidate of candidatePaths) {
+    try {
+      const fileContent = await readFile(candidate);
+      const dataUri = `data:image/svg+xml;base64,${Buffer.from(
+        fileContent,
+      ).toString('base64')}`;
+      const updatedTag = match[0].replace(href, dataUri);
+      return html.replace(match[0], updatedTag);
+    } catch {
+      // continue trying other locations
+    }
+  }
+
+  return html;
+}
+
 async function buildSpa() {
   const originalHtml = await readFile(sourceHtmlPath, 'utf8');
   const htmlWithInlinedAssets = await inlineAssets(originalHtml);
-  const minifiedHtml = await minify(htmlWithInlinedAssets, {
+  const htmlWithFavicon = await inlineFavicon(htmlWithInlinedAssets);
+  const minifiedHtml = await minify(htmlWithFavicon, {
     collapseWhitespace: true,
     minifyCSS: true,
     minifyJS: true,
@@ -73,7 +115,15 @@ async function buildSpa() {
   });
 
   await writeFile(outputHtmlPath, minifiedHtml, 'utf8');
-  console.log(`SPA bundle written to ${path.relative(process.cwd(), outputHtmlPath)}`);
+  await mkdir(docsDir, { recursive: true });
+  await writeFile(docsOutputPath, minifiedHtml, 'utf8');
+
+  console.log(
+    `SPA bundle written to ${path.relative(
+      process.cwd(),
+      outputHtmlPath,
+    )} and ${path.relative(process.cwd(), docsOutputPath)}`,
+  );
 }
 
 buildSpa().catch((error) => {
