@@ -1,12 +1,66 @@
 :root {
+  --color-bg: #e2e8f0;
+  --color-gradient-top: rgba(59, 130, 246, 0.18);
+  --color-gradient-bottom: rgba(249, 115, 22, 0.12);
+  --color-text-primary: #0f172a;
+  --color-text-muted: #475569;
+  --color-surface: rgba(255, 255, 255, 0.9);
+  --color-surface-solid: #ffffff;
+  --color-border: #d7dde6;
+  --color-border-strong: #d0d7e3;
+  --color-stepper-border: #ccd6f6;
+  --color-pill-bg: #f1f5f9;
+  --color-pill-text: #1e293b;
+  --color-muted-strong: #64748b;
+  --color-toolbar-text: #475569;
+  --color-side-used: #cbd5f5;
+  --color-board-square: #f8fafc;
+  --color-board-stroke: #334155;
+  --color-overlay: rgba(15, 23, 42, 0.14);
+  --color-toggle-hover: rgba(148, 163, 184, 0.2);
+  --color-node-available: rgba(37, 99, 235, 0.18);
+  --color-node-targetable: rgba(34, 197, 94, 0.22);
+  --color-node-selected: #2563eb;
+  --color-node-available-hover: rgba(37, 99, 235, 0.28);
+  --color-player-a-pill: linear-gradient(135deg, rgba(37, 99, 235, 0.28), rgba(59, 130, 246, 0.45));
+  --color-player-b-pill: linear-gradient(135deg, rgba(249, 115, 22, 0.32), rgba(251, 191, 36, 0.5));
+
   font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   line-height: 1.6;
   font-weight: 400;
-  color: #0f172a;
-  background-color: #e2e8f0;
+  color: var(--color-text-primary);
+  background-color: var(--color-bg);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+body[data-theme='dark'] {
+  --color-bg: #0b1120;
+  --color-gradient-top: rgba(59, 130, 246, 0.25);
+  --color-gradient-bottom: rgba(14, 165, 233, 0.2);
+  --color-text-primary: #f8fafc;
+  --color-text-muted: #cbd5f5;
+  --color-surface: rgba(30, 41, 59, 0.85);
+  --color-surface-solid: #1f2937;
+  --color-border: #243042;
+  --color-border-strong: #2f3d51;
+  --color-stepper-border: #3a4a63;
+  --color-pill-bg: rgba(30, 41, 59, 0.9);
+  --color-pill-text: #e2e8f0;
+  --color-muted-strong: #94a3b8;
+  --color-toolbar-text: #cbd5f5;
+  --color-side-used: rgba(148, 163, 184, 0.35);
+  --color-board-square: #1f2937;
+  --color-board-stroke: #94a3b8;
+  --color-overlay: rgba(15, 23, 42, 0.38);
+  --color-toggle-hover: rgba(148, 163, 184, 0.35);
+  --color-node-available: rgba(96, 165, 250, 0.35);
+  --color-node-targetable: rgba(110, 231, 183, 0.35);
+  --color-node-selected: #60a5fa;
+  --color-node-available-hover: rgba(96, 165, 250, 0.5);
+  --color-player-a-pill: linear-gradient(135deg, rgba(96, 165, 250, 0.45), rgba(59, 130, 246, 0.65));
+  --color-player-b-pill: linear-gradient(135deg, rgba(251, 146, 60, 0.45), rgba(250, 204, 21, 0.55));
 }
 
 *,
@@ -18,9 +72,11 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: radial-gradient(circle at top, rgba(59, 130, 246, 0.18), transparent 60%),
-    radial-gradient(circle at bottom, rgba(249, 115, 22, 0.12), transparent 50%),
-    #e2e8f0;
+  color: var(--color-text-primary);
+  background: radial-gradient(circle at top, var(--color-gradient-top), transparent 60%),
+    radial-gradient(circle at bottom, var(--color-gradient-bottom), transparent 50%),
+    var(--color-bg);
+  transition: background 200ms ease, color 200ms ease;
 }
 
 #root {

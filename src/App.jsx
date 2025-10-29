@@ -1,23 +1,19 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 const SIDE_ORDER = ['top', 'right', 'bottom', 'left']
-const SQUARE_SIZE = 180
-const GAP = 120
+const SQUARE_SIZE = 120
+const GAP = 150
 const PADDING_X = 120
-const PADDING_TOP = 60
-const PADDING_BOTTOM = 60
-const ROW_GAP = 60
+const PADDING_TOP = 100
+const PADDING_BOTTOM = 100
+const ROW_GAP = GAP
 const MIN_SQUARES = 2
 const MAX_SQUARES = 6
 const INITIAL_STATUS = ''
 const LAYOUTS = {
   HORIZONTAL: 'horizontal',
   VERTICAL: 'vertical',
-}
-const MODES = {
-  EASY: 'easy',
-  FREEFORM: 'freeform',
 }
 const FREEFORM_MIN_SEGMENT = 6
 
@@ -30,6 +26,9 @@ const MESSAGE_LEVELS = {
   WARNING: 'warning',
 }
 const MESSAGE_TIMEOUT = 3000
+const GRID_CELL_SIZE = 8
+const SQUARE_MARGIN = 16
+const LINE_MARGIN = 16
 
 function createBoard(squareCount, layout) {
   if (layout === LAYOUTS.VERTICAL) {
@@ -286,6 +285,403 @@ function pathSelfIntersects(points) {
   return false
 }
 
+function pointInsideSquare(point, square) {
+  const epsilon = EPSILON * 10
+  return (
+    point.x > square.x + epsilon &&
+    point.x < square.x + square.size - epsilon &&
+    point.y > square.y + epsilon &&
+    point.y < square.y + square.size - epsilon
+  )
+}
+
+function segmentCrossesSquareInterior(p1, p2, square, allowedSquareIds) {
+  const dx = p2.x - p1.x
+  const dy = p2.y - p1.y
+
+  let t0 = 0
+  let t1 = 1
+
+  const edges = [
+    [-dx, p1.x - square.x],
+    [dx, square.x + square.size - p1.x],
+    [-dy, p1.y - square.y],
+    [dy, square.y + square.size - p1.y],
+  ]
+
+  for (const [p, q] of edges) {
+    if (almostEqual(p, 0)) {
+      if (q < 0) {
+        return false
+      }
+      continue
+    }
+
+    const r = q / p
+
+    if (p < 0) {
+      if (r > t1) {
+        return false
+      }
+      if (r > t0) {
+        t0 = r
+      }
+    } else {
+      if (r < t0) {
+        return false
+      }
+      if (r < t1) {
+        t1 = r
+      }
+    }
+  }
+
+  if (t0 > t1) {
+    return false
+  }
+
+  const entryT = Math.max(t0, 0)
+  const exitT = Math.min(t1, 1)
+
+  if (exitT < 0 || entryT > 1) {
+    return false
+  }
+
+  const midT = (entryT + exitT) / 2
+  const midPoint = {
+    x: p1.x + midT * dx,
+    y: p1.y + midT * dy,
+  }
+
+  if (!pointInsideSquare(midPoint, square)) {
+    return false
+  }
+
+  const interiorSpan = exitT - entryT
+  if (allowedSquareIds.has(square.id) && interiorSpan <= 0.02) {
+    return false
+  }
+
+  return true
+}
+
+function pathCrossesSquares(points, squares, fromSquareId, toSquareId) {
+  const allowed = new Set()
+  if (fromSquareId !== null && fromSquareId !== undefined) {
+    allowed.add(fromSquareId)
+  }
+  if (toSquareId !== null && toSquareId !== undefined) {
+    allowed.add(toSquareId)
+  }
+
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const start = points[i]
+    const end = points[i + 1]
+
+    for (const square of squares) {
+      if (segmentCrossesSquareInterior(start, end, square, allowed)) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
+function pointInsideSquareWithMargin(point, square, margin) {
+  return (
+    point.x > square.x + margin &&
+    point.x < square.x + square.size - margin &&
+    point.y > square.y + margin &&
+    point.y < square.y + square.size - margin
+  )
+}
+
+function distancePointToSegment(point, a, b) {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const lengthSquared = dx * dx + dy * dy
+
+  if (almostEqual(lengthSquared, 0)) {
+    return Math.hypot(point.x - a.x, point.y - a.y)
+  }
+
+  let t =
+    ((point.x - a.x) * dx + (point.y - a.y) * dy) /
+    lengthSquared
+
+  t = Math.max(0, Math.min(1, t))
+
+  const projection = {
+    x: a.x + t * dx,
+    y: a.y + t * dy,
+  }
+
+  return Math.hypot(point.x - projection.x, point.y - projection.y)
+}
+
+function buildObstacleGrid(board, connections, cellSize = GRID_CELL_SIZE) {
+  const cols = Math.max(1, Math.ceil(board.viewBox.width / cellSize))
+  const rows = Math.max(1, Math.ceil(board.viewBox.height / cellSize))
+  const grid = Array.from({ length: rows }, () => Array(cols).fill(false))
+  const halfCell = cellSize / 2
+
+  const segments = []
+  connections.forEach((connection) => {
+    const points =
+      connection.points && connection.points.length >= 2
+        ? connection.points
+        : [connection.start, connection.end]
+
+    for (let index = 0; index < points.length - 1; index += 1) {
+      segments.push([points[index], points[index + 1]])
+    }
+  })
+
+  for (let row = 0; row < rows; row += 1) {
+    const cy = row * cellSize + halfCell
+
+    for (let col = 0; col < cols; col += 1) {
+      const cx = col * cellSize + halfCell
+      const point = { x: cx, y: cy }
+
+      if (
+        board.squares.some((square) =>
+          pointInsideSquareWithMargin(point, square, SQUARE_MARGIN),
+        )
+      ) {
+        grid[row][col] = true
+        continue
+      }
+
+      for (const [start, end] of segments) {
+        if (distancePointToSegment(point, start, end) <= LINE_MARGIN) {
+          grid[row][col] = true
+          break
+        }
+      }
+    }
+  }
+
+  return {
+    grid,
+    cols,
+    rows,
+    cellSize,
+  }
+}
+
+function pointToCell(point, cellSize, cols, rows) {
+  return {
+    x: Math.min(cols - 1, Math.max(0, Math.floor(point.x / cellSize))),
+    y: Math.min(rows - 1, Math.max(0, Math.floor(point.y / cellSize))),
+  }
+}
+
+function canRouteBetweenSides(from, to, board, connections, obstacleField) {
+  const field = obstacleField ?? buildObstacleGrid(board, connections)
+  const { grid, cols, rows, cellSize } = field
+
+  const startPoint = getMidpoint(board.squares, from.squareId, from.side)
+  const endPoint = getMidpoint(board.squares, to.squareId, to.side)
+
+  if (!startPoint || !endPoint) {
+    return false
+  }
+
+  const startCell = pointToCell(startPoint, cellSize, cols, rows)
+  const targetCell = pointToCell(endPoint, cellSize, cols, rows)
+
+  const queue = [[startCell.x, startCell.y]]
+  const visited = Array.from({ length: rows }, () => Array(cols).fill(false))
+  const parents = Array.from({ length: rows }, () => Array(cols).fill(null))
+  visited[startCell.y][startCell.x] = true
+
+  let head = 0
+
+  while (head < queue.length) {
+    const [cx, cy] = queue[head]
+    head += 1
+
+    if (cx === targetCell.x && cy === targetCell.y) {
+      const pathCells = []
+      let cursor = { x: cx, y: cy }
+
+      while (cursor) {
+        pathCells.push(cursor)
+        cursor = parents[cursor.y][cursor.x]
+      }
+
+      pathCells.reverse()
+
+      const pathPoints = [startPoint]
+      for (let index = 1; index < pathCells.length - 1; index += 1) {
+        const cell = pathCells[index]
+        pathPoints.push({
+          x: cell.x * cellSize + cellSize / 2,
+          y: cell.y * cellSize + cellSize / 2,
+        })
+      }
+      pathPoints.push(endPoint)
+
+      if (
+        !pathIntersectsExisting(pathPoints, connections) &&
+        !pathCrossesSquares(pathPoints, board.squares, from.squareId, to.squareId)
+      ) {
+        return true
+      }
+
+      visited[cy][cx] = false
+      continue
+    }
+
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        if (dx === 0 && dy === 0) {
+          continue
+        }
+
+        const nx = cx + dx
+        const ny = cy + dy
+
+        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) {
+          continue
+        }
+
+        if (visited[ny][nx]) {
+          continue
+        }
+
+        if (
+          grid[ny][nx] &&
+          !(nx === startCell.x && ny === startCell.y) &&
+          !(nx === targetCell.x && ny === targetCell.y)
+        ) {
+          continue
+        }
+
+        visited[ny][nx] = true
+        parents[ny][nx] = { x: cx, y: cy }
+        queue.push([nx, ny])
+      }
+    }
+  }
+
+  if (hasVisibilityPath(from, to, board, connections)) {
+    return true
+  }
+
+  return false
+}
+
+function hasVisibilityPath(from, to, board, connections) {
+  const waypoints = buildVisibilityWaypoints(from, to, board)
+  if (waypoints.length < 2) {
+    return false
+  }
+
+  const adjacency = Array.from({ length: waypoints.length }, () => [])
+
+  for (let i = 0; i < waypoints.length; i += 1) {
+    for (let j = i + 1; j < waypoints.length; j += 1) {
+      if (!segmentIsValid(waypoints[i], waypoints[j], board, connections)) {
+        continue
+      }
+
+      adjacency[i].push(j)
+      adjacency[j].push(i)
+    }
+  }
+
+  const startIndex = 0
+  const targetIndex = 1
+
+  const queue = [startIndex]
+  const visited = new Array(waypoints.length).fill(false)
+  visited[startIndex] = true
+
+  while (queue.length > 0) {
+    const node = queue.shift()
+    if (node === targetIndex) {
+      return true
+    }
+
+    adjacency[node].forEach((neighbor) => {
+      if (!visited[neighbor]) {
+        visited[neighbor] = true
+        queue.push(neighbor)
+      }
+    })
+  }
+
+  return false
+}
+
+function buildVisibilityWaypoints(from, to, board) {
+  const waypoints = []
+  const push = (point, squareId = null) => waypoints.push({ point, squareId })
+
+  const startPoint = getMidpoint(board.squares, from.squareId, from.side)
+  const endPoint = getMidpoint(board.squares, to.squareId, to.side)
+
+  if (!startPoint || !endPoint) {
+    return waypoints
+  }
+
+  push(startPoint, from.squareId)
+  push(endPoint, to.squareId)
+
+  const offset = SQUARE_MARGIN + LINE_MARGIN
+  board.squares.forEach((square) => {
+    const corners = [
+      { x: square.x - offset, y: square.y - offset },
+      { x: square.x + square.size + offset, y: square.y - offset },
+      { x: square.x + square.size + offset, y: square.y + square.size + offset },
+      { x: square.x - offset, y: square.y + square.size + offset },
+    ]
+
+    corners.forEach((corner) => {
+      const clamped = {
+        x: Math.min(Math.max(corner.x, 0), board.viewBox.width),
+        y: Math.min(Math.max(corner.y, 0), board.viewBox.height),
+      }
+      push(clamped)
+    })
+  })
+
+  const borderOffset = LINE_MARGIN * 2
+  const borderPoints = [
+    { x: borderOffset, y: borderOffset },
+    { x: board.viewBox.width - borderOffset, y: borderOffset },
+    { x: board.viewBox.width - borderOffset, y: board.viewBox.height - borderOffset },
+    { x: borderOffset, y: board.viewBox.height - borderOffset },
+  ]
+
+  borderPoints.forEach((point) => push(point))
+
+  return waypoints
+}
+
+function segmentIsValid(nodeA, nodeB, board, connections) {
+  const points = [nodeA.point, nodeB.point]
+  if (
+    pathCrossesSquares(
+      points,
+      board.squares,
+      nodeA.squareId ?? null,
+      nodeB.squareId ?? null,
+    )
+  ) {
+    return false
+  }
+
+  if (pathIntersectsExisting(points, connections)) {
+    return false
+  }
+
+  return true
+}
+
 function pointsToPathData(points) {
   if (!points || points.length < 2) {
     return ''
@@ -338,8 +734,9 @@ function listAvailableSides(squares, usedSides) {
   return available
 }
 
-function hasAnyLegalMove(squares, usedSides, connections, mode) {
-  const availableSides = listAvailableSides(squares, usedSides)
+function hasAnyLegalMove(board, usedSides, connections, obstacleField) {
+  const availableSides = listAvailableSides(board.squares, usedSides)
+  const field = obstacleField ?? buildObstacleGrid(board, connections)
 
   for (let i = 0; i < availableSides.length; i += 1) {
     const from = availableSides[i]
@@ -350,18 +747,9 @@ function hasAnyLegalMove(squares, usedSides, connections, mode) {
         continue
       }
 
-      if (mode === MODES.FREEFORM) {
-        return true
-      }
-
-      const candidate = buildLine(squares, from, to)
-      if (!candidate) {
-        continue
-      }
-
-      const candidatePoints = [candidate.start, candidate.end]
-
-      if (!pathIntersectsExisting(candidatePoints, connections)) {
+      if (
+        canRouteBetweenSides(from, to, board, connections, field)
+      ) {
         return true
       }
     }
@@ -373,7 +761,22 @@ function hasAnyLegalMove(squares, usedSides, connections, mode) {
 function App() {
   const [squareCount, setSquareCount] = useState(2)
   const [layout, setLayout] = useState(LAYOUTS.HORIZONTAL)
-  const [mode, setMode] = useState(MODES.FREEFORM)
+  const [theme, setTheme] = useState(() => {
+    if (typeof window === 'undefined') {
+      return 'light'
+    }
+    try {
+      const stored = window.localStorage.getItem('josephs-squares-theme')
+      if (stored === 'light' || stored === 'dark') {
+        return stored
+      }
+      return window.matchMedia('(prefers-color-scheme: dark)').matches
+        ? 'dark'
+        : 'light'
+    } catch {
+      return 'light'
+    }
+  })
   const [currentPlayer, setCurrentPlayer] = useState('A')
   const [selectedSide, setSelectedSide] = useState(null)
   const [connections, setConnections] = useState([])
@@ -386,11 +789,29 @@ function App() {
   const [isDrawing, setIsDrawing] = useState(false)
   const [freeformLine, setFreeformLine] = useState(null)
 
+  useEffect(() => {
+    document.body.dataset.theme = theme
+    try {
+      window.localStorage.setItem('josephs-squares-theme', theme)
+    } catch {
+      // ignore storage errors
+    }
+  }, [theme])
+
+  const toggleTheme = () => {
+    setTheme((previous) => (previous === 'light' ? 'dark' : 'light'))
+  }
+
   const svgRef = useRef(null)
 
   const board = useMemo(
     () => createBoard(squareCount, layout),
     [squareCount, layout],
+  )
+
+  const obstacleField = useMemo(
+    () => buildObstacleGrid(board, connections),
+    [board, connections],
   )
 
   const availableTargets = useMemo(() => {
@@ -411,31 +832,22 @@ function App() {
           return
         }
 
-        if (mode === MODES.FREEFORM) {
-          targets.add(key)
-          return
-        }
-
-        const candidate = buildLine(
-          board.squares,
-          selectedSide,
-          { squareId: square.id, side },
-        )
-
-        if (!candidate) {
-          return
-        }
-
-        const candidatePoints = [candidate.start, candidate.end]
-
-        if (!pathIntersectsExisting(candidatePoints, connections)) {
+        if (
+          canRouteBetweenSides(
+            selectedSide,
+            { squareId: square.id, side },
+            board,
+            connections,
+            obstacleField,
+          )
+        ) {
           targets.add(key)
         }
       })
     })
 
     return targets
-  }, [selectedSide, usedSides, connections, board, mode])
+  }, [selectedSide, usedSides, board, connections, obstacleField])
 
   const convertClientToBoardCoords = (clientX, clientY) => {
     const svg = svgRef.current
@@ -523,6 +935,18 @@ function App() {
       return false
     }
 
+    if (
+      pathCrossesSquares(
+        points,
+        board.squares,
+        selectedSide.squareId,
+        targetSquareId,
+      )
+    ) {
+      showMessage(MESSAGE_LEVELS.WARNING, 'Paths cannot pass through squares.')
+      return false
+    }
+
     const connection = {
       from: selectedSide,
       to: { squareId: targetSquareId, side: targetSide },
@@ -538,11 +962,12 @@ function App() {
     updatedUsedSides.add(targetKey)
 
     const nextPlayer = currentPlayer === 'A' ? 'B' : 'A'
+    const updatedField = buildObstacleGrid(board, updatedConnections)
     const movesRemain = hasAnyLegalMove(
-      board.squares,
+      board,
       updatedUsedSides,
       updatedConnections,
-      mode,
+      updatedField,
     )
 
     setConnections(updatedConnections)
@@ -616,63 +1041,22 @@ function App() {
     resetGame('')
   }
 
-const handleReset = () => {
-  resetGame()
-}
+  const handleReset = () => {
+    resetGame()
+  }
 
   const handleLayoutChange = (nextLayout) => {
     if (layout === nextLayout) {
       return
     }
 
-  setLayout(nextLayout)
-  const layoutMessage = gameOver ? INITIAL_STATUS : ''
-  resetGame(layoutMessage)
-}
-
-const handleModeChange = (nextMode) => {
-  if (mode === nextMode) {
-    return
-  }
-
-  setMode(nextMode)
-  const modeMessage = gameOver ? INITIAL_STATUS : ''
-  resetGame(modeMessage)
-}
-
-  const handleSideClick = (squareId, side) => {
-    if (mode !== MODES.EASY || gameOver) {
-      return
-    }
-
-    const sideKey = `${squareId}:${side}`
-
-    if (usedSides.has(sideKey)) {
-      showMessage(MESSAGE_LEVELS.WARNING, "That side's taken.")
-      return
-    }
-
-    if (
-      selectedSide &&
-      selectedSide.squareId === squareId &&
-      selectedSide.side === side
-    ) {
-      setSelectedSide(null)
-      showMessage(MESSAGE_LEVELS.INFO, '')
-      return
-    }
-
-    if (!selectedSide) {
-      setSelectedSide({ squareId, side })
-      showMessage(MESSAGE_LEVELS.INFO, '')
-      return
-    }
-
-    finalizeConnection(squareId, side)
+    setLayout(nextLayout)
+    const layoutMessage = gameOver ? INITIAL_STATUS : ''
+    resetGame(layoutMessage)
   }
 
   const handleSidePointerDown = (squareId, side, event) => {
-    if (mode !== MODES.FREEFORM || gameOver) {
+    if (gameOver) {
       return
     }
 
@@ -723,7 +1107,7 @@ const handleModeChange = (nextMode) => {
   }
 
   const handlePointerMove = (event) => {
-    if (mode !== MODES.FREEFORM || !isDrawing) {
+    if (!isDrawing) {
       return
     }
 
@@ -751,7 +1135,7 @@ const handleModeChange = (nextMode) => {
   }
 
   const handlePointerUp = (event) => {
-    if (mode !== MODES.FREEFORM || !isDrawing) {
+    if (!isDrawing) {
       return
     }
 
@@ -830,27 +1214,44 @@ const handleModeChange = (nextMode) => {
   return (
     <div className="app">
       <header className="app__header">
-        <h1>Joseph&apos;s Squares</h1>
+        <div className="app__title-row">
+          <h1>Joseph&apos;s Squares</h1>
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={toggleTheme}
+            aria-pressed={theme === 'dark'}
+            aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
+          >
+            {theme === 'light' ? <MoonIcon /> : <SunIcon />}
+          </button>
+        </div>
         <p className="app__tagline">
           Connect the sides without crossing lines. Last player with a move wins.
         </p>
       </header>
 
-      <section className="status-bar">
-        <div className="status-bar__info">
-          <span className={`status-bar__badge ${PLAYER_STYLES[currentPlayer]}`}>
-            {gameOver
-              ? `Winner: Player ${winner}`
-              : `Player ${currentPlayer} - pick a side`}
-          </span>
-        </div>
-        <button
-          onClick={handleReset}
-          className="status-bar__action"
+      <div className={`status-pill status-pill--${gameOver ? 'winner' : messageLevel}`}>
+        {(() => {
+          const modifier = gameOver
+            ? 'status-pill__badge--winner'
+            : messageLevel === MESSAGE_LEVELS.WARNING
+              ? 'status-pill__badge--warning'
+              : ''
+          const badgeClass = ['status-pill__badge', PLAYER_STYLES[currentPlayer], modifier]
+            .filter(Boolean)
+            .join(' ')
+          return (
+        <span
+            className={badgeClass}
         >
-          Start new game
-        </button>
-      </section>
+          {gameOver
+            ? `🏆 Player ${winner} wins!`
+            : `Player ${currentPlayer} - ${statusMessage || 'pick a side'}`}
+        </span>
+          )
+        })()}
+      </div>
 
       <section className="toolbar">
         <div className="toolbar__group toolbar__group--squares">
@@ -913,35 +1314,19 @@ const handleModeChange = (nextMode) => {
           </div>
         </div>
 
-        <div className="toolbar__group">
-          <span className="toolbar__label">Mode</span>
-          <div className="toolbar__toggle">
-            <button
-              type="button"
-              className={`toolbar__toggle-button${
-                mode === MODES.FREEFORM ? ' toolbar__toggle-button--active' : ''
-              }`}
-              onClick={() => handleModeChange(MODES.FREEFORM)}
-              aria-pressed={mode === MODES.FREEFORM}
-            >
-              Freeform
-            </button>
-            <button
-              type="button"
-              className={`toolbar__toggle-button${
-                mode === MODES.EASY ? ' toolbar__toggle-button--active' : ''
-              }`}
-              onClick={() => handleModeChange(MODES.EASY)}
-              aria-pressed={mode === MODES.EASY}
-            >
-              Easy
-            </button>
-          </div>
-        </div>
+        <div className="toolbar__spacer" />
+
+        <button
+          type="button"
+          className="toolbar__action"
+          onClick={handleReset}
+        >
+          {gameOver ? 'Play again' : 'Start new game'}
+        </button>
 
       </section>
 
-      <div className="board">
+      <div className={`board${gameOver ? ' board--over' : ''}`}>
         <svg
           ref={svgRef}
           viewBox={board.viewBox.asString}
@@ -990,16 +1375,7 @@ const handleModeChange = (nextMode) => {
                       className={circleClassNames}
                       data-square-id={square.id}
                       data-side={side}
-                      onClick={
-                        mode === MODES.EASY
-                          ? () => handleSideClick(square.id, side)
-                          : undefined
-                      }
-                      onPointerDown={
-                        mode === MODES.FREEFORM
-                          ? (event) => handleSidePointerDown(square.id, side, event)
-                          : undefined
-                      }
+                      onPointerDown={(event) => handleSidePointerDown(square.id, side, event)}
                     />
                   </g>
                 )
@@ -1007,7 +1383,7 @@ const handleModeChange = (nextMode) => {
             </g>
           ))}
 
-          {mode === MODES.FREEFORM && freeformLine
+          {freeformLine
           ? (() => {
               const basePoints = freeformLine.points || []
               const includeCurrent =
@@ -1053,23 +1429,12 @@ const handleModeChange = (nextMode) => {
         </svg>
       </div>
 
-      {statusMessage ? (
-        <div className={`notice notice--${messageLevel}`} role="status">
-          <span
-            aria-hidden="true"
-            className={`notice__icon notice__icon--${messageLevel}`}
-          />
-          <span className="notice__text">{statusMessage}</span>
-        </div>
-      ) : null}
-
       <details className="rules">
         <summary>Game Rules</summary>
         <ul>
           <li>Connect sides without crossing lines. Last move wins.</li>
-          <li>Connect unused sides on different squares without crossing lines.</li>
+          <li>Draw between unused sides on different squares; every line must stay outside the squares.</li>
           <li>Each side can be used once. When you have no legal moves, you lose.</li>
-          <li>Freeform mode lets you draw the connection path; Easy mode draws the straight line for you.</li>
         </ul>
       </details>
     </div>
@@ -1077,3 +1442,41 @@ const handleModeChange = (nextMode) => {
 }
 
 export default App
+
+function SunIcon(props) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2" />
+      <path d="M12 20v2" />
+      <path d="m4.93 4.93 1.41 1.41" />
+      <path d="m17.66 17.66 1.41 1.41" />
+      <path d="M2 12h2" />
+      <path d="M20 12h2" />
+      <path d="m6.34 17.66-1.41 1.41" />
+      <path d="m19.07 4.93-1.41 1.41" />
+    </svg>
+  )
+}
+
+function MoonIcon(props) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" />
+    </svg>
+  )
+}

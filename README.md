@@ -7,15 +7,11 @@ Joseph’s Squares is a two-player pencil-and-paper style strategy game inspired
 1. Use the toolbar to set your board:
    - **Squares**: between 2 and 6 using the +/- stepper.
    - **Layout**: keep every square in a single row or switch to a staggered grid.
-   - **Mode**: toggle between Easy (auto-drawn straight lines) and Freeform (drawn by hand).
-2. Player A starts by selecting any unused side of a square. Selecting a side highlights every side on other squares that can be connected without crossing existing lines.
-   - In Freeform mode, drag from the starting dot to sketch any curve. Release on another dot to lock it in; releasing elsewhere cancels the line.
-   - In Easy mode, simply click the highlighted target side to connect the squares.
-3. Click the highlighted target side (Easy) or release on it (Freeform) to complete the connection. Each side can only be used once.
-4. Players alternate turns drawing connections. Lines may not cross.
-5. If the current player cannot draw a valid line, they lose.
+2. Player A starts by selecting any unused side of a square. Drag from that side to another square’s free side; release on the target dot to lock the connection.
+3. Every path must stay outside the squares—the line cannot pass through their interior. Existing lines also cannot be crossed.
+4. Each side can be used once. Players alternate turns drawing connections; the first player without a legal move loses.
 
-Need a fresh start? Use **Start new game** below the board. The collapsible Rules panel keeps a quick refresher handy without crowding the play space.
+Need a fresh start? Use **Start new game** in the toolbar (it becomes **Play again** after a win). Toggle light/dark mode with the sun/moon button beside the title. The collapsible **Game Rules** panel keeps a quick refresher handy without crowding the play space.
 
 ## Strategy Notes
 
