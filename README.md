@@ -17,6 +17,13 @@ Joseph’s Squares is a two-player pencil-and-paper style strategy game inspired
 - Larger boards introduce more complex geometry, especially when using the vertical layout. Try five or six squares in a 3+2 or 3+3 arrangement for longer games.
 - No “trick” line drawings: keep lines clean and unambiguous so both players can follow the state of the board.
 
+## Screenshots
+
+<p align="center">
+  <img src="./js-light.png" alt="Joseph's Squares light theme screenshot" width="48%" />
+  <img src="./js-dark.png" alt="Joseph's Squares dark theme screenshot" width="48%" />
+</p>
+
 ## Running Locally
 
 ```bash
