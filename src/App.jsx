@@ -1,21 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 const SIDE_ORDER = ['top', 'right', 'bottom', 'left']
-const SQUARE_SIZE = 120
-const GAP = 150
-const PADDING_X = 120
-const PADDING_TOP = 100
-const PADDING_BOTTOM = 100
-const ROW_GAP = GAP
 const MIN_SQUARES = 2
 const MAX_SQUARES = 6
+const SQUARE_SIZE = 200
+const GAP = 480
+const MAX_COLUMNS = 3
+const MAX_ROWS = 2
+const BOARD_WIDTH =
+  MAX_COLUMNS * SQUARE_SIZE + (MAX_COLUMNS + 1) * GAP
+const BOARD_HEIGHT =
+  MAX_ROWS * SQUARE_SIZE + (MAX_ROWS + 1) * GAP
 const INITIAL_STATUS = ''
-const LAYOUTS = {
-  HORIZONTAL: 'horizontal',
-  VERTICAL: 'vertical',
-}
-const FREEFORM_MIN_SEGMENT = 6
+const FREEFORM_MIN_SEGMENT = 4
+const VALIDATION_SEGMENT_LENGTH = 6
 
 const PLAYER_STYLES = {
   A: 'player-a',
@@ -26,101 +25,216 @@ const MESSAGE_LEVELS = {
   WARNING: 'warning',
 }
 const MESSAGE_TIMEOUT = 3000
-const GRID_CELL_SIZE = 8
-const SQUARE_MARGIN = 16
-const LINE_MARGIN = 16
+const GRID_TARGET_PIXEL_SIZE = 4
+const LINE_MARGIN_PX = 12
+const SQUARE_MARGIN_PX = 12
+const MIN_GRID_CELL_SIZE = 4
 
-function createBoard(squareCount, layout) {
-  if (layout === LAYOUTS.VERTICAL) {
-    const rowBreakdown = []
-    const maxPerRow = squareCount === 4 ? 2 : Math.min(3, squareCount)
-    let remaining = squareCount
+const ROW_PRESETS = {
+  2: [2],
+  3: [2, 1],
+  4: [2, 2],
+  5: [3, 2],
+  6: [3, 3],
+}
 
-    while (remaining > 0) {
-      const slotsInRow = Math.min(maxPerRow, remaining)
-      rowBreakdown.push(slotsInRow)
-      remaining -= slotsInRow
+function deriveGridMetrics(unitsPerPixel) {
+  const scale =
+    Number.isFinite(unitsPerPixel) && unitsPerPixel > 0 ? unitsPerPixel : 1
+
+  const cellSize = Math.max(
+    MIN_GRID_CELL_SIZE,
+    scale * GRID_TARGET_PIXEL_SIZE,
+  )
+
+  const squareMargin = scale * SQUARE_MARGIN_PX
+  const lineMargin = scale * LINE_MARGIN_PX
+
+  return {
+    cellSize,
+    squareMargin,
+    lineMargin,
+  }
+}
+
+const DEFAULT_GRID_METRICS = deriveGridMetrics(1)
+
+function isDifferentSquare(sideA, sideB) {
+  return sideA.squareId !== sideB.squareId
+}
+
+function multiSourcePathExists(board, availableSides, field) {
+  const { grid, cols, rows, cellSize, lineMargin } = field
+  const startCellOwners = new Map()
+  const visited = Array.from({ length: rows }, () => new Uint16Array(cols))
+  const queue = []
+
+  for (let index = 0; index < availableSides.length; index += 1) {
+    const side = availableSides[index]
+    const midpoint = getAnchorPoint(
+      board.squares,
+      side.squareId,
+      side.side,
+      { lineMargin },
+    )
+    if (!midpoint) {
+      continue
     }
 
-    const columns = rowBreakdown.length ? Math.max(...rowBreakdown) : 0
-    const rows = rowBreakdown.length || 1
-    const totalWidth = columns * SQUARE_SIZE + (columns - 1) * GAP
-    const totalHeight =
-      rows * SQUARE_SIZE + (rows - 1) * ROW_GAP
+    const cell = pointToCell(midpoint, cellSize, cols, rows)
+    const key = cell.y * cols + cell.x
+    const owners = startCellOwners.get(key)
 
-    const squares = []
-    let idCounter = 0
+    if (owners) {
+      owners.push(index)
+    } else {
+      startCellOwners.set(key, [index])
+    }
 
-    rowBreakdown.forEach((slotsInRow, rowIndex) => {
-      const rowWidth = slotsInRow * SQUARE_SIZE + (slotsInRow - 1) * GAP
-      const startX = PADDING_X + (totalWidth - rowWidth) / 2
-      const y = PADDING_TOP + rowIndex * (SQUARE_SIZE + ROW_GAP)
-
-      for (let colIndex = 0; colIndex < slotsInRow; colIndex += 1) {
-        const x = startX + colIndex * (SQUARE_SIZE + GAP)
-        const size = SQUARE_SIZE
-        const half = size / 2
-
-        squares.push({
-          id: idCounter,
-          x,
-          y,
-          size,
-          midpoints: {
-            top: { x: x + half, y },
-            right: { x: x + size, y: y + half },
-            bottom: { x: x + half, y: y + size },
-            left: { x, y: y + half },
-          },
-        })
-
-        idCounter += 1
+    const previous = visited[cell.y][cell.x]
+    if (previous !== 0) {
+      const otherIndex = previous - 1
+      if (isDifferentSquare(side, availableSides[otherIndex])) {
+        return true
       }
-    })
+      continue
+    }
 
-    const viewBoxWidth = totalWidth + PADDING_X * 2
-    const viewBoxHeight = totalHeight + PADDING_TOP + PADDING_BOTTOM
+    visited[cell.y][cell.x] = index + 1
+    queue.push({ x: cell.x, y: cell.y, origin: index })
+  }
 
-    return {
-      squares,
-      viewBox: {
-        width: viewBoxWidth,
-        height: viewBoxHeight,
-        asString: `0 0 ${viewBoxWidth} ${viewBoxHeight}`,
-      },
+  const directions = [
+    [-1, -1],
+    [-1, 0],
+    [-1, 1],
+    [0, -1],
+    [0, 1],
+    [1, -1],
+    [1, 0],
+    [1, 1],
+  ]
+
+  let head = 0
+  while (head < queue.length) {
+    const { x, y, origin } = queue[head]
+    head += 1
+
+    for (const [dx, dy] of directions) {
+      const nx = x + dx
+      const ny = y + dy
+
+      if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) {
+        continue
+      }
+
+      const key = ny * cols + nx
+      const isOriginCell = startCellOwners.has(key)
+
+      if (grid[ny][nx] && !isOriginCell) {
+        continue
+      }
+
+      if (dx !== 0 && dy !== 0) {
+        const orthAKey = y * cols + nx
+        const orthBKey = ny * cols + x
+        const orthABlocked = grid[y][nx]
+        const orthBBlocked = grid[ny][x]
+        const orthAOrigin = startCellOwners.has(orthAKey)
+        const orthBOrigin = startCellOwners.has(orthBKey)
+
+        if ((orthABlocked && !orthAOrigin) || (orthBBlocked && !orthBOrigin)) {
+          continue
+        }
+      }
+
+      const previous = visited[ny][nx]
+      if (previous === 0) {
+        visited[ny][nx] = origin + 1
+        queue.push({ x: nx, y: ny, origin })
+        continue
+      }
+
+      if (previous === origin + 1) {
+        continue
+      }
+
+      const otherIndex = previous - 1
+      if (isDifferentSquare(availableSides[origin], availableSides[otherIndex])) {
+        return true
+      }
     }
   }
 
-  const totalWidth = squareCount * SQUARE_SIZE + (squareCount - 1) * GAP
-  const viewBoxWidth = totalWidth + PADDING_X * 2
-  const viewBoxHeight = SQUARE_SIZE + PADDING_TOP + PADDING_BOTTOM
+  return false
+}
 
-  const squares = Array.from({ length: squareCount }).map((_, index) => {
-    const x = PADDING_X + index * (SQUARE_SIZE + GAP)
-    const y = PADDING_TOP
-    const size = SQUARE_SIZE
-    const half = size / 2
+function buildRowBreakdown(squareCount) {
+  if (ROW_PRESETS[squareCount]) {
+    return ROW_PRESETS[squareCount]
+  }
 
-    return {
-      id: index,
-      x,
-      y,
-      size,
-      midpoints: {
-        top: { x: x + half, y },
-        right: { x: x + size, y: y + half },
-        bottom: { x: x + half, y: y + size },
-        left: { x, y: y + half },
-      },
+  const breakdown = []
+  const maxPerRow = Math.min(MAX_COLUMNS, squareCount)
+  let remaining = squareCount
+
+  while (remaining > 0) {
+    const slotsInRow = Math.min(maxPerRow, remaining)
+    breakdown.push(slotsInRow)
+    remaining -= slotsInRow
+  }
+
+  return breakdown
+}
+
+function createBoard(squareCount) {
+  const rowBreakdown = buildRowBreakdown(squareCount)
+
+  const rows = rowBreakdown.length || 1
+  const boardWidth = BOARD_WIDTH
+  const boardHeight = BOARD_HEIGHT
+  const verticalSpacing =
+    (boardHeight - rows * SQUARE_SIZE) / (rows + 1)
+
+  const squares = []
+  let idCounter = 0
+
+  rowBreakdown.forEach((slotsInRow, rowIndex) => {
+    const rowY =
+      verticalSpacing * (rowIndex + 1) + rowIndex * SQUARE_SIZE
+    const horizontalSpacing =
+      (boardWidth - slotsInRow * SQUARE_SIZE) / (slotsInRow + 1)
+
+    for (let colIndex = 0; colIndex < slotsInRow; colIndex += 1) {
+      const x =
+        horizontalSpacing * (colIndex + 1) +
+        colIndex * SQUARE_SIZE
+      const y = rowY
+      const half = SQUARE_SIZE / 2
+
+      squares.push({
+        id: idCounter,
+        x,
+        y,
+        size: SQUARE_SIZE,
+        midpoints: {
+          top: { x: x + half, y },
+          right: { x: x + SQUARE_SIZE, y: y + half },
+          bottom: { x: x + half, y: y + SQUARE_SIZE },
+          left: { x, y: y + half },
+        },
+      })
+
+      idCounter += 1
     }
   })
 
   return {
     squares,
     viewBox: {
-      width: viewBoxWidth,
-      height: viewBoxHeight,
-      asString: `0 0 ${viewBoxWidth} ${viewBoxHeight}`,
+      width: boardWidth,
+      height: boardHeight,
+      asString: `0 0 ${boardWidth} ${boardHeight}`,
     },
   }
 }
@@ -191,14 +305,40 @@ function segmentsIntersectStrict(a1, a2, b1, b2) {
   return false
 }
 
-function getMidpoint(squares, squareId, side) {
+function getMidpoint(squares, squareId, side, offset = 0) {
   const square = squares.find((item) => item.id === squareId)
-  return square?.midpoints[side] ?? null
+  const base = square?.midpoints[side]
+
+  if (!base || !square) {
+    return null
+  }
+
+  if (offset <= 0) {
+    return base
+  }
+
+  switch (side) {
+    case 'top':
+      return { x: base.x, y: base.y - offset }
+    case 'right':
+      return { x: base.x + offset, y: base.y }
+    case 'bottom':
+      return { x: base.x, y: base.y + offset }
+    case 'left':
+      return { x: base.x - offset, y: base.y }
+    default:
+      return base
+  }
 }
 
-function buildLine(squares, from, to) {
-  const start = getMidpoint(squares, from.squareId, from.side)
-  const end = getMidpoint(squares, to.squareId, to.side)
+function getAnchorPoint(squares, squareId, side, metrics) {
+  const offset = metrics?.lineMargin ?? 0
+  return getMidpoint(squares, squareId, side, offset)
+}
+
+function buildLine(squares, from, to, metrics) {
+  const start = getAnchorPoint(squares, from.squareId, from.side, metrics)
+  const end = getAnchorPoint(squares, to.squareId, to.side, metrics)
 
   if (!start || !end) {
     return null
@@ -388,6 +528,46 @@ function pathCrossesSquares(points, squares, fromSquareId, toSquareId) {
   return false
 }
 
+function pathTouchesMidpoints(points, squares, startNode, endNode, metrics) {
+  if (!points || points.length < 2) {
+    return false
+  }
+
+  const activeMetrics = metrics ?? DEFAULT_GRID_METRICS
+  const limit = activeMetrics.lineMargin
+  const segments = pointsToSegments(points)
+
+  const skipKeys = new Set()
+  if (startNode) {
+    skipKeys.add(`${startNode.squareId ?? ''}:${startNode.side ?? ''}`)
+  }
+  if (endNode) {
+    skipKeys.add(`${endNode.squareId ?? ''}:${endNode.side ?? ''}`)
+  }
+
+  for (const square of squares) {
+    for (const side of SIDE_ORDER) {
+      const key = `${square.id}:${side}`
+      if (skipKeys.has(key)) {
+        continue
+      }
+
+      const midpoint = getMidpoint(squares, square.id, side, 0)
+      if (!midpoint) {
+        continue
+      }
+
+      for (const [start, end] of segments) {
+        if (distancePointToSegment(midpoint, start, end) <= limit) {
+          return true
+        }
+      }
+    }
+  }
+
+  return false
+}
+
 function pointInsideSquareWithMargin(point, square, margin) {
   return (
     point.x > square.x + margin &&
@@ -420,7 +600,10 @@ function distancePointToSegment(point, a, b) {
   return Math.hypot(point.x - projection.x, point.y - projection.y)
 }
 
-function buildObstacleGrid(board, connections, cellSize = GRID_CELL_SIZE) {
+function buildObstacleGrid(board, connections, metrics) {
+  const activeMetrics = metrics ?? DEFAULT_GRID_METRICS
+  const { cellSize, squareMargin, lineMargin } = activeMetrics
+
   const cols = Math.max(1, Math.ceil(board.viewBox.width / cellSize))
   const rows = Math.max(1, Math.ceil(board.viewBox.height / cellSize))
   const grid = Array.from({ length: rows }, () => Array(cols).fill(false))
@@ -438,6 +621,16 @@ function buildObstacleGrid(board, connections, cellSize = GRID_CELL_SIZE) {
     }
   })
 
+  const midpointEntries = []
+  board.squares.forEach((square) => {
+    SIDE_ORDER.forEach((side) => {
+      const midpoint = getMidpoint(board.squares, square.id, side, 0)
+      if (midpoint) {
+        midpointEntries.push({ squareId: square.id, side, point: midpoint })
+      }
+    })
+  })
+
   for (let row = 0; row < rows; row += 1) {
     const cy = row * cellSize + halfCell
 
@@ -447,15 +640,29 @@ function buildObstacleGrid(board, connections, cellSize = GRID_CELL_SIZE) {
 
       if (
         board.squares.some((square) =>
-          pointInsideSquareWithMargin(point, square, SQUARE_MARGIN),
+          pointInsideSquareWithMargin(point, square, squareMargin),
         )
       ) {
         grid[row][col] = true
         continue
       }
 
+      let blockedByMidpoint = false
+      for (const midpoint of midpointEntries) {
+        const distance = Math.hypot(point.x - midpoint.point.x, point.y - midpoint.point.y)
+        if (distance <= lineMargin) {
+          blockedByMidpoint = true
+          break
+        }
+      }
+
+      if (blockedByMidpoint) {
+        grid[row][col] = true
+        continue
+      }
+
       for (const [start, end] of segments) {
-        if (distancePointToSegment(point, start, end) <= LINE_MARGIN) {
+        if (distancePointToSegment(point, start, end) <= lineMargin) {
           grid[row][col] = true
           break
         }
@@ -468,6 +675,8 @@ function buildObstacleGrid(board, connections, cellSize = GRID_CELL_SIZE) {
     cols,
     rows,
     cellSize,
+    squareMargin,
+    lineMargin,
   }
 }
 
@@ -478,12 +687,13 @@ function pointToCell(point, cellSize, cols, rows) {
   }
 }
 
-function canRouteBetweenSides(from, to, board, connections, obstacleField) {
-  const field = obstacleField ?? buildObstacleGrid(board, connections)
-  const { grid, cols, rows, cellSize } = field
+function canRouteBetweenSides(from, to, board, connections, obstacleField, metrics) {
+  const field = obstacleField ?? buildObstacleGrid(board, connections, metrics)
+  const { grid, cols, rows, cellSize, lineMargin } = field
 
-  const startPoint = getMidpoint(board.squares, from.squareId, from.side)
-  const endPoint = getMidpoint(board.squares, to.squareId, to.side)
+  const activeMetrics = metrics ?? { lineMargin }
+  const startPoint = getAnchorPoint(board.squares, from.squareId, from.side, activeMetrics)
+  const endPoint = getAnchorPoint(board.squares, to.squareId, to.side, activeMetrics)
 
   if (!startPoint || !endPoint) {
     return false
@@ -524,9 +734,23 @@ function canRouteBetweenSides(from, to, board, connections, obstacleField) {
       }
       pathPoints.push(endPoint)
 
+      const validationPath = resampleSegments(pathPoints)
+
       if (
-        !pathIntersectsExisting(pathPoints, connections) &&
-        !pathCrossesSquares(pathPoints, board.squares, from.squareId, to.squareId)
+        !pathIntersectsExisting(validationPath, connections) &&
+        !pathCrossesSquares(
+          validationPath,
+          board.squares,
+          from.squareId,
+          to.squareId,
+        ) &&
+        !pathTouchesMidpoints(
+          validationPath,
+          board.squares,
+          from,
+          to,
+          activeMetrics,
+        )
       ) {
         return true
       }
@@ -560,6 +784,17 @@ function canRouteBetweenSides(from, to, board, connections, obstacleField) {
           continue
         }
 
+        if (dx !== 0 && dy !== 0) {
+          const orthBlockedA =
+            grid[cy][nx] && !(nx === startCell.x && cy === startCell.y) && !(nx === targetCell.x && cy === targetCell.y)
+          const orthBlockedB =
+            grid[ny][cx] && !(cx === startCell.x && ny === startCell.y) && !(cx === targetCell.x && ny === targetCell.y)
+
+          if (orthBlockedA || orthBlockedB) {
+            continue
+          }
+        }
+
         visited[ny][nx] = true
         parents[ny][nx] = { x: cx, y: cy }
         queue.push([nx, ny])
@@ -567,15 +802,15 @@ function canRouteBetweenSides(from, to, board, connections, obstacleField) {
     }
   }
 
-  if (hasVisibilityPath(from, to, board, connections)) {
+  if (hasVisibilityPath(from, to, board, connections, metrics)) {
     return true
   }
 
   return false
 }
 
-function hasVisibilityPath(from, to, board, connections) {
-  const waypoints = buildVisibilityWaypoints(from, to, board)
+function hasVisibilityPath(from, to, board, connections, metrics) {
+  const waypoints = buildVisibilityWaypoints(from, to, board, metrics)
   if (waypoints.length < 2) {
     return false
   }
@@ -584,7 +819,15 @@ function hasVisibilityPath(from, to, board, connections) {
 
   for (let i = 0; i < waypoints.length; i += 1) {
     for (let j = i + 1; j < waypoints.length; j += 1) {
-      if (!segmentIsValid(waypoints[i], waypoints[j], board, connections)) {
+      if (
+        !segmentIsValid(
+          waypoints[i],
+          waypoints[j],
+          board,
+          connections,
+          metrics,
+        )
+      ) {
         continue
       }
 
@@ -617,12 +860,16 @@ function hasVisibilityPath(from, to, board, connections) {
   return false
 }
 
-function buildVisibilityWaypoints(from, to, board) {
+function buildVisibilityWaypoints(from, to, board, metrics) {
+  const activeMetrics = metrics ?? DEFAULT_GRID_METRICS
+  const offset = activeMetrics.squareMargin + activeMetrics.lineMargin
+  const borderOffset = activeMetrics.lineMargin * 2
+
   const waypoints = []
   const push = (point, squareId = null) => waypoints.push({ point, squareId })
 
-  const startPoint = getMidpoint(board.squares, from.squareId, from.side)
-  const endPoint = getMidpoint(board.squares, to.squareId, to.side)
+  const startPoint = getAnchorPoint(board.squares, from.squareId, from.side, activeMetrics)
+  const endPoint = getAnchorPoint(board.squares, to.squareId, to.side, activeMetrics)
 
   if (!startPoint || !endPoint) {
     return waypoints
@@ -631,7 +878,6 @@ function buildVisibilityWaypoints(from, to, board) {
   push(startPoint, from.squareId)
   push(endPoint, to.squareId)
 
-  const offset = SQUARE_MARGIN + LINE_MARGIN
   board.squares.forEach((square) => {
     const corners = [
       { x: square.x - offset, y: square.y - offset },
@@ -649,7 +895,6 @@ function buildVisibilityWaypoints(from, to, board) {
     })
   })
 
-  const borderOffset = LINE_MARGIN * 2
   const borderPoints = [
     { x: borderOffset, y: borderOffset },
     { x: board.viewBox.width - borderOffset, y: borderOffset },
@@ -662,8 +907,8 @@ function buildVisibilityWaypoints(from, to, board) {
   return waypoints
 }
 
-function segmentIsValid(nodeA, nodeB, board, connections) {
-  const points = [nodeA.point, nodeB.point]
+function segmentIsValid(nodeA, nodeB, board, connections, metrics) {
+  const points = resampleSegments([nodeA.point, nodeB.point])
   if (
     pathCrossesSquares(
       points,
@@ -676,6 +921,10 @@ function segmentIsValid(nodeA, nodeB, board, connections) {
   }
 
   if (pathIntersectsExisting(points, connections)) {
+    return false
+  }
+
+  if (pathTouchesMidpoints(points, board.squares, nodeA, nodeB, metrics)) {
     return false
   }
 
@@ -716,6 +965,39 @@ function dedupePoints(points) {
   return deduped
 }
 
+function resampleSegments(points, maxSegmentLength = VALIDATION_SEGMENT_LENGTH) {
+  if (!points || points.length < 2) {
+    return points
+  }
+
+  const resampled = [points[0]]
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = points[index]
+    const end = points[index + 1]
+    const dx = end.x - start.x
+    const dy = end.y - start.y
+    const segmentLength = Math.hypot(dx, dy)
+
+    if (segmentLength <= maxSegmentLength) {
+      resampled.push(end)
+      continue
+    }
+
+    const steps = Math.max(1, Math.ceil(segmentLength / maxSegmentLength))
+
+    for (let step = 1; step <= steps; step += 1) {
+      const t = step / steps
+      resampled.push({
+        x: start.x + dx * t,
+        y: start.y + dy * t,
+      })
+    }
+  }
+
+  return resampled
+}
+
 function listAvailableSides(squares, usedSides) {
   const available = []
 
@@ -734,22 +1016,28 @@ function listAvailableSides(squares, usedSides) {
   return available
 }
 
-function hasAnyLegalMove(board, usedSides, connections, obstacleField) {
+function hasAnyLegalMove(board, usedSides, connections, obstacleField, metrics) {
   const availableSides = listAvailableSides(board.squares, usedSides)
-  const field = obstacleField ?? buildObstacleGrid(board, connections)
+  if (availableSides.length < 2) {
+    return false
+  }
+
+  const field = obstacleField ?? buildObstacleGrid(board, connections, metrics)
+
+  if (multiSourcePathExists(board, availableSides, field)) {
+    return true
+  }
 
   for (let i = 0; i < availableSides.length; i += 1) {
     const from = availableSides[i]
     for (let j = i + 1; j < availableSides.length; j += 1) {
       const to = availableSides[j]
 
-      if (from.squareId === to.squareId) {
+      if (!isDifferentSquare(from, to)) {
         continue
       }
 
-      if (
-        canRouteBetweenSides(from, to, board, connections, field)
-      ) {
+      if (hasVisibilityPath(from, to, board, connections, metrics)) {
         return true
       }
     }
@@ -760,10 +1048,9 @@ function hasAnyLegalMove(board, usedSides, connections, obstacleField) {
 
 function App() {
   const [squareCount, setSquareCount] = useState(2)
-  const [layout, setLayout] = useState(LAYOUTS.HORIZONTAL)
   const [theme, setTheme] = useState(() => {
     if (typeof window === 'undefined') {
-      return 'light'
+      return 'dark'
     }
     try {
       const stored = window.localStorage.getItem('josephs-squares-theme')
@@ -772,9 +1059,9 @@ function App() {
       }
       return window.matchMedia('(prefers-color-scheme: dark)').matches
         ? 'dark'
-        : 'light'
+        : 'dark'
     } catch {
-      return 'light'
+      return 'dark'
     }
   })
   const [currentPlayer, setCurrentPlayer] = useState('A')
@@ -784,10 +1071,13 @@ function App() {
   const [statusMessage, setStatusMessage] = useState(INITIAL_STATUS)
   const [messageLevel, setMessageLevel] = useState(MESSAGE_LEVELS.INFO)
   const messageTimeoutRef = useRef()
+  const pendingCheckTimeoutRef = useRef()
   const [gameOver, setGameOver] = useState(false)
   const [winner, setWinner] = useState(null)
   const [isDrawing, setIsDrawing] = useState(false)
   const [freeformLine, setFreeformLine] = useState(null)
+  const [isCheckingMoves, setIsCheckingMoves] = useState(false)
+  const [unitsPerPixel, setUnitsPerPixel] = useState(1)
 
   useEffect(() => {
     document.body.dataset.theme = theme
@@ -798,20 +1088,49 @@ function App() {
     }
   }, [theme])
 
+  const svgRef = useRef(null)
+
+  const board = useMemo(
+    () => createBoard(squareCount),
+    [squareCount],
+  )
+
+  useLayoutEffect(() => {
+    const svg = svgRef.current
+    if (!svg) {
+      return
+    }
+
+    const updateScale = () => {
+      const rect = svg.getBoundingClientRect()
+      if (rect.height > 0) {
+        const next = board.viewBox.height / rect.height
+        setUnitsPerPixel((previous) =>
+          Math.abs(previous - next) > 0.01 ? next : previous,
+        )
+      }
+    }
+
+    updateScale()
+    window.addEventListener('resize', updateScale)
+
+    return () => {
+      window.removeEventListener('resize', updateScale)
+    }
+  }, [board])
+
   const toggleTheme = () => {
     setTheme((previous) => (previous === 'light' ? 'dark' : 'light'))
   }
 
-  const svgRef = useRef(null)
-
-  const board = useMemo(
-    () => createBoard(squareCount, layout),
-    [squareCount, layout],
+  const gridMetrics = useMemo(
+    () => deriveGridMetrics(unitsPerPixel),
+    [unitsPerPixel],
   )
 
   const obstacleField = useMemo(
-    () => buildObstacleGrid(board, connections),
-    [board, connections],
+    () => buildObstacleGrid(board, connections, gridMetrics),
+    [board, connections, gridMetrics],
   )
 
   const availableTargets = useMemo(() => {
@@ -839,6 +1158,7 @@ function App() {
             board,
             connections,
             obstacleField,
+            gridMetrics,
           )
         ) {
           targets.add(key)
@@ -847,7 +1167,7 @@ function App() {
     })
 
     return targets
-  }, [selectedSide, usedSides, board, connections, obstacleField])
+  }, [selectedSide, usedSides, board, connections, obstacleField, gridMetrics])
 
   const convertClientToBoardCoords = (clientX, clientY) => {
     const svg = svgRef.current
@@ -868,6 +1188,10 @@ function App() {
   }
 
   const finalizeConnection = (targetSquareId, targetSide, overridePoints) => {
+    if (isCheckingMoves) {
+      return false
+    }
+
     if (!selectedSide) {
       return false
     }
@@ -884,12 +1208,18 @@ function App() {
       return false
     }
 
-    const startPoint = getMidpoint(
+    const startPoint = getAnchorPoint(
       board.squares,
       selectedSide.squareId,
       selectedSide.side,
+      gridMetrics,
     )
-    const targetPoint = getMidpoint(board.squares, targetSquareId, targetSide)
+    const targetPoint = getAnchorPoint(
+      board.squares,
+      targetSquareId,
+      targetSide,
+      gridMetrics,
+    )
 
     if (!startPoint || !targetPoint) {
       showMessage(MESSAGE_LEVELS.INFO, '')
@@ -908,6 +1238,7 @@ function App() {
         board.squares,
         selectedSide,
         { squareId: targetSquareId, side: targetSide },
+        gridMetrics,
       )
 
       if (!candidate) {
@@ -925,25 +1256,40 @@ function App() {
       return false
     }
 
-    if (pathSelfIntersects(points)) {
+    const validationPoints = resampleSegments(points)
+
+    if (pathSelfIntersects(validationPoints)) {
       showMessage(MESSAGE_LEVELS.WARNING, "Paths can't cross themselves.")
       return false
     }
 
-    if (pathIntersectsExisting(points, connections)) {
+    if (pathIntersectsExisting(validationPoints, connections)) {
       showMessage(MESSAGE_LEVELS.WARNING, "Paths can't cross existing lines.")
       return false
     }
 
     if (
       pathCrossesSquares(
-        points,
+        validationPoints,
         board.squares,
         selectedSide.squareId,
         targetSquareId,
       )
     ) {
       showMessage(MESSAGE_LEVELS.WARNING, 'Paths cannot pass through squares.')
+      return false
+    }
+
+    if (
+      pathTouchesMidpoints(
+        validationPoints,
+        board.squares,
+        selectedSide,
+        { squareId: targetSquareId, side: targetSide },
+        gridMetrics,
+      )
+    ) {
+      showMessage(MESSAGE_LEVELS.WARNING, 'Paths cannot pass through unused nodes.')
       return false
     }
 
@@ -962,38 +1308,55 @@ function App() {
     updatedUsedSides.add(targetKey)
 
     const nextPlayer = currentPlayer === 'A' ? 'B' : 'A'
-    const updatedField = buildObstacleGrid(board, updatedConnections)
-    const movesRemain = hasAnyLegalMove(
-      board,
-      updatedUsedSides,
-      updatedConnections,
-      updatedField,
-    )
 
-    if (!movesRemain && connections.length === 0) {
-      setSelectedSide(null)
-      setFreeformLine(null)
-      showMessage(
-        MESSAGE_LEVELS.WARNING,
-        'Nice try, cheater. Try again!',
-      )
-      return false
-    }
-
-    setConnections(updatedConnections)
-    setUsedSides(updatedUsedSides)
     setSelectedSide(null)
     setFreeformLine(null)
+    setIsCheckingMoves(true)
 
-    if (!movesRemain) {
-      setGameOver(true)
-      setWinner(currentPlayer)
-      showMessage(MESSAGE_LEVELS.INFO, '')
-      return true
+    if (pendingCheckTimeoutRef.current) {
+      clearTimeout(pendingCheckTimeoutRef.current)
     }
 
-    setCurrentPlayer(nextPlayer)
-    showMessage(MESSAGE_LEVELS.INFO, '')
+    pendingCheckTimeoutRef.current = setTimeout(() => {
+      try {
+        const updatedField = buildObstacleGrid(
+          board,
+          updatedConnections,
+          gridMetrics,
+        )
+        const movesRemain = hasAnyLegalMove(
+          board,
+          updatedUsedSides,
+          updatedConnections,
+          updatedField,
+          gridMetrics,
+        )
+
+        if (!movesRemain && connections.length === 0) {
+          showMessage(
+            MESSAGE_LEVELS.WARNING,
+            'Nice try, cheater. Try again!',
+          )
+          return
+        }
+
+        setConnections(updatedConnections)
+        setUsedSides(updatedUsedSides)
+
+        if (!movesRemain) {
+          setGameOver(true)
+          setWinner(currentPlayer)
+          showMessage(MESSAGE_LEVELS.INFO, '')
+        } else {
+          setCurrentPlayer(nextPlayer)
+          showMessage(MESSAGE_LEVELS.INFO, '')
+        }
+      } finally {
+        setIsCheckingMoves(false)
+        pendingCheckTimeoutRef.current = null
+      }
+    }, 0)
+
     return true
   }
 
@@ -1023,6 +1386,11 @@ function App() {
     setCurrentPlayer('A')
     setGameOver(false)
     setWinner(null)
+    if (pendingCheckTimeoutRef.current) {
+      clearTimeout(pendingCheckTimeoutRef.current)
+      pendingCheckTimeoutRef.current = null
+    }
+    setIsCheckingMoves(false)
     showMessage(MESSAGE_LEVELS.INFO, message)
   }
 
@@ -1055,18 +1423,12 @@ function App() {
     resetGame()
   }
 
-  const handleLayoutChange = (nextLayout) => {
-    if (layout === nextLayout) {
+  const handleSidePointerDown = (squareId, side, event) => {
+    if (gameOver) {
       return
     }
 
-    setLayout(nextLayout)
-    const layoutMessage = gameOver ? INITIAL_STATUS : ''
-    resetGame(layoutMessage)
-  }
-
-  const handleSidePointerDown = (squareId, side, event) => {
-    if (gameOver) {
+    if (isCheckingMoves) {
       return
     }
 
@@ -1094,7 +1456,7 @@ function App() {
 
     showMessage(MESSAGE_LEVELS.INFO, '')
 
-    const startPoint = getMidpoint(board.squares, squareId, side)
+    const startPoint = getAnchorPoint(board.squares, squareId, side, gridMetrics)
 
     if (!startPoint) {
       return
@@ -1197,7 +1559,16 @@ function App() {
       return
     }
 
-    const targetPoint = getMidpoint(board.squares, squareId, side)
+    const targetPoint = getAnchorPoint(board.squares, squareId, side, gridMetrics)
+
+    const startPoint = drawing.start
+      ? drawing.start
+      : getAnchorPoint(
+          board.squares,
+          selectedSide.squareId,
+          selectedSide.side,
+          gridMetrics,
+        )
 
     const pathPointsBase = drawing.current
       ? [...drawing.points, drawing.current]
@@ -1205,12 +1576,10 @@ function App() {
 
     const sanitizedPoints = pathPointsBase.slice()
 
-    if (
-      sanitizedPoints.length === 0 ||
-      !samePoint(sanitizedPoints[sanitizedPoints.length - 1], targetPoint)
-    ) {
-      sanitizedPoints.push(targetPoint)
+    if (sanitizedPoints.length === 0) {
+      sanitizedPoints.push(startPoint, targetPoint)
     } else {
+      sanitizedPoints[0] = startPoint
       sanitizedPoints[sanitizedPoints.length - 1] = targetPoint
     }
 
@@ -1252,27 +1621,33 @@ function App() {
             .filter(Boolean)
             .join(' ')
           return (
-        <span
-            className={badgeClass}
-        >
-          {gameOver
-            ? `🏆 Player ${winner} wins!`
-            : `Player ${currentPlayer} - ${statusMessage || 'pick a side'}`}
-        </span>
+            <span
+              className={badgeClass}
+            >
+              {gameOver
+                ? `🏆 Player ${winner} wins!`
+                : `Player ${currentPlayer} - ${statusMessage || 'pick a side'}`}
+              {isCheckingMoves ? (
+                <>
+                  <span className="status-pill__spinner" aria-hidden="true" />
+                  <span className="sr-only">Checking available moves…</span>
+                </>
+              ) : null}
+            </span>
           )
         })()}
       </div>
 
       <section className="toolbar">
         <div className="toolbar__group toolbar__group--squares">
-          <span className="toolbar__label">Squares</span>
+          <span className="toolbar__label">Shapes</span>
           <div className="toolbar__stepper">
             <button
               type="button"
               className="toolbar__stepper-button"
               onClick={() => handleSquareStep(-1)}
               disabled={squareCount <= MIN_SQUARES}
-              aria-label="Decrease squares"
+              aria-label="Decrease shapes"
             >
               –
             </button>
@@ -1284,42 +1659,16 @@ function App() {
               value={squareCount}
               onChange={handleSquareInput}
               className="toolbar__stepper-value"
-              aria-label="Number of squares"
+              aria-label="Number of shapes"
             />
             <button
               type="button"
               className="toolbar__stepper-button"
               onClick={() => handleSquareStep(1)}
               disabled={squareCount >= MAX_SQUARES}
-              aria-label="Increase squares"
+              aria-label="Increase shapes"
             >
               +
-            </button>
-          </div>
-        </div>
-
-        <div className="toolbar__group">
-          <span className="toolbar__label">Layout</span>
-          <div className="toolbar__toggle">
-            <button
-              type="button"
-              className={`toolbar__toggle-button${
-                layout === LAYOUTS.HORIZONTAL ? ' toolbar__toggle-button--active' : ''
-              }`}
-              onClick={() => handleLayoutChange(LAYOUTS.HORIZONTAL)}
-              aria-pressed={layout === LAYOUTS.HORIZONTAL}
-            >
-              Horizontal
-            </button>
-            <button
-              type="button"
-              className={`toolbar__toggle-button${
-                layout === LAYOUTS.VERTICAL ? ' toolbar__toggle-button--active' : ''
-              }`}
-              onClick={() => handleLayoutChange(LAYOUTS.VERTICAL)}
-              aria-pressed={layout === LAYOUTS.VERTICAL}
-            >
-              Vertical
             </button>
           </div>
         </div>
@@ -1381,7 +1730,7 @@ function App() {
                     <circle
                       cx={point.x}
                       cy={point.y}
-                      r={12}
+                      r={24}
                       className={circleClassNames}
                       data-square-id={square.id}
                       data-side={side}
