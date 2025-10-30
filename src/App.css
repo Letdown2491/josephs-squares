@@ -87,6 +87,7 @@
 .status-pill__badge {
   display: inline-flex;
   align-items: center;
+  gap: 8px;
   padding: 8px 20px;
   border-radius: 999px;
   font-weight: 600;
@@ -94,6 +95,17 @@
   box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
   background: var(--color-pill-bg);
   color: var(--color-pill-text);
+}
+
+.status-pill__icon {
+  width: 18px;
+  height: 18px;
+}
+
+.status-pill__icon,
+.status-pill__icon--a,
+.status-pill__icon--b {
+  color: #ffffff;
 }
 
 .status-pill__spinner {
@@ -114,7 +126,7 @@
 
 .status-pill__badge.player-a {
   background: rgba(37, 99, 235, 0.18);
-  color: #1d4ed8;
+  color: var(--color-pill-text);
 }
 
 .status-pill__badge.player-b {
@@ -137,8 +149,8 @@
 }
 
 .status-pill__badge.player-b.status-pill__badge--winner {
-  background: var(--color-player-b-pill);
-  color: #1f2937;
+  background: rgba(249, 115, 22, 0.68);
+  color: #ffffff;
 }
 
 .toolbar {
