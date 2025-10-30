@@ -2,6 +2,8 @@
 
 Joseph’s Squares is a two-player pencil-and-paper style strategy game inspired by a [Nostr note from @fiatjaf](https://njump.me/nevent1qvzqqqqqqypzqwlsccluhy6xxsr6l9a9uhhxf75g85g8a709tprjcn4e42h053vaqydhwumn8ghj7un9d3shjtnhv4ehgetjde38gcewvdhk6tcprfmhxue69uhhq7tjv9kkjepwve5kzar2v9nzucm0d5hsqgppppzeg4tw3n3qgsfytvgmcj6z544z47zj03hgnf4rrrysnexdpcu9ha5l). This web version lets you experiment with different board sizes and layouts while keeping the original rules intact.
 
+[Click here to play the game](https://squares.geektoshi.tech/)
+
 ## How to Play
 
 1. Use the toolbar to set your board:

@@ -4,14 +4,38 @@ import './App.css'
 const SIDE_ORDER = ['top', 'right', 'bottom', 'left']
 const MIN_SQUARES = 2
 const MAX_SQUARES = 6
-const SQUARE_SIZE = 200
+const SHAPE_TYPES = {
+  SQUARE: 'square',
+}
+
+const SHAPE_CONFIGS = {
+  [SHAPE_TYPES.SQUARE]: {
+    id: SHAPE_TYPES.SQUARE,
+    displayName: 'Square',
+    size: 200,
+    anchorFactory: ({ x, y, size }) => {
+      const half = size / 2
+      return {
+        top: { x: x + half, y },
+        right: { x: x + size, y: y + half },
+        bottom: { x: x + half, y: y + size },
+        left: { x, y: y + half },
+      }
+    },
+    outlineFactory: ({ size }) => ({ width: size, height: size, rotation: 0 }),
+    sides: ['top', 'right', 'bottom', 'left'],
+  },
+}
+
+const DEFAULT_SHAPE_SEQUENCE = [SHAPE_TYPES.SQUARE]
+
+const BASE_SHAPE = SHAPE_CONFIGS[SHAPE_TYPES.SQUARE]
+const SHAPE_SIZE = BASE_SHAPE.size
 const GAP = 480
 const MAX_COLUMNS = 3
 const MAX_ROWS = 2
-const BOARD_WIDTH =
-  MAX_COLUMNS * SQUARE_SIZE + (MAX_COLUMNS + 1) * GAP
-const BOARD_HEIGHT =
-  MAX_ROWS * SQUARE_SIZE + (MAX_ROWS + 1) * GAP
+const BOARD_WIDTH = MAX_COLUMNS * SHAPE_SIZE + (MAX_COLUMNS + 1) * GAP
+const BOARD_HEIGHT = MAX_ROWS * SHAPE_SIZE + (MAX_ROWS + 1) * GAP
 const INITIAL_STATUS = ''
 const FREEFORM_MIN_SEGMENT = 4
 const VALIDATION_SEGMENT_LENGTH = 6
@@ -194,33 +218,33 @@ function createBoard(squareCount) {
   const boardWidth = BOARD_WIDTH
   const boardHeight = BOARD_HEIGHT
   const verticalSpacing =
-    (boardHeight - rows * SQUARE_SIZE) / (rows + 1)
+    (boardHeight - rows * SHAPE_SIZE) / (rows + 1)
 
   const squares = []
   let idCounter = 0
 
   rowBreakdown.forEach((slotsInRow, rowIndex) => {
     const rowY =
-      verticalSpacing * (rowIndex + 1) + rowIndex * SQUARE_SIZE
+      verticalSpacing * (rowIndex + 1) + rowIndex * SHAPE_SIZE
     const horizontalSpacing =
-      (boardWidth - slotsInRow * SQUARE_SIZE) / (slotsInRow + 1)
+      (boardWidth - slotsInRow * SHAPE_SIZE) / (slotsInRow + 1)
 
     for (let colIndex = 0; colIndex < slotsInRow; colIndex += 1) {
       const x =
         horizontalSpacing * (colIndex + 1) +
-        colIndex * SQUARE_SIZE
+        colIndex * SHAPE_SIZE
       const y = rowY
-      const half = SQUARE_SIZE / 2
+      const half = SHAPE_SIZE / 2
 
       squares.push({
         id: idCounter,
         x,
         y,
-        size: SQUARE_SIZE,
+        size: SHAPE_SIZE,
         midpoints: {
           top: { x: x + half, y },
-          right: { x: x + SQUARE_SIZE, y: y + half },
-          bottom: { x: x + half, y: y + SQUARE_SIZE },
+          right: { x: x + SHAPE_SIZE, y: y + half },
+          bottom: { x: x + half, y: y + SHAPE_SIZE },
           left: { x, y: y + half },
         },
       })
